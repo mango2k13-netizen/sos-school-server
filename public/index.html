@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hệ Thống Giám Sát SOS Khẩn Cấp Nhiều Trường</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    body { background-color: #f1f5f9; padding: 20px; color: #334155; }
+    
+    .header { 
+      background: #0f172a; 
+      color: white; 
+      padding: 20px; 
+      border-radius: 12px; 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      margin-bottom: 20px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+
+    .school-selector {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    select {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      font-weight: bold;
+      font-size: 15px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .status-badge { 
+      background: #22c55e; 
+      color: white; 
+      padding: 6px 14px; 
+      border-radius: 20px; 
+      font-size: 14px; 
+      font-weight: 600;
+    }
+    
+    .alert-banner { 
+      display: none; 
+      background: #dc2626; 
+      color: white; 
+      padding: 25px; 
+      border-radius: 12px; 
+      margin-bottom: 20px; 
+      animation: pulse 0.8s infinite alternate; 
+      box-shadow: 0 10px 15px -3px rgba(220,38,38,0.4);
+    }
+
+    @keyframes pulse { 
+      0% { transform: scale(0.99); } 
+      100% { transform: scale(1.005); } 
+    }
+    
+    .alert-banner h2 { font-size: 26px; margin-bottom: 12px; }
+    .alert-info { font-size: 18px; line-height: 1.6; }
+    
+    .map-btn { 
+      display: inline-block; 
+      margin-top: 12px; 
+      padding: 10px 18px; 
+      background: #fef08a; 
+      color: #854d0e; 
+      text-decoration: none; 
+      border-radius: 6px; 
+      font-weight: bold; 
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .dismiss-btn {
+      margin-top: 15px; 
+      padding: 10px 20px; 
+      background: white; 
+      color: #dc2626; 
+      border: none; 
+      border-radius: 6px; 
+      font-weight: bold; 
+      cursor: pointer;
+      font-size: 15px;
+    }
+
+    .card { 
+      background: white; 
+      padding: 24px; 
+      border-radius: 12px; 
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+    }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { text-align: left; padding: 14px; border-bottom: 1px solid #e2e8f0; }
+    th { background: #f8fafc; color: #64748b; font-size: 14px; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div>
+      <h1 style="font-size: 22px;">🏫 TỔNG ĐÀI KHẨN CẤP SOS TRƯỜNG HỌC</h1>
+    </div>
+
+    <!-- Menu chọn Trường trực tiếp trên giao diện -->
+    <div class="school-selector">
+      <label for="schoolSelect">Đang theo dõi:</label>
+      <select id="schoolSelect" onchange="changeSchool()">
+        <!-- Được tự động điền danh sách trường từ API -->
+      </select>
+      <span class="status-badge" id="status">Đang nối...</span>
+    </div>
+  </div>
+
+  <!-- Báo động khẩn cấp nhấp nháy đỏ -->
+  <div class="alert-banner" id="sosBanner">
+    <h2>🚨 CẢNH BÁO SOS KHẨN CẤP!</h2>
+    <div class="alert-info" id="sosDetails"></div>
+    <button class="dismiss-btn" onclick="dismissAlert()">✅ Đã Xử Lý / Tắt Còi Cảnh Báo</button>
+  </div>
+
+  <!-- Bảng nhật ký SOS -->
+  <div class="card">
+    <h3 id="tableTitle">📋 Nhật ký tín hiệu SOS trong ngày</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Thời gian</th>
+          <th>Học sinh</th>
+          <th>Lớp</th>
+          <th>Mã Thẻ (MAC)</th>
+          <th>Tọa độ GPS</th>
+          <th>Vị trí Google Maps</th>
+        </tr>
+      </thead>
+      <tbody id="sosLog">
+        <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Chưa có tín hiệu SOS nào cho trường này.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <audio id="alarmSound" src="https://actions.google.com/sounds/v1/emergency/beeping_emergency_alarm.ogg" loop></audio>
+
+  <script>
+    let socket;
+    const urlParams = new URLSearchParams(window.location.search);
+    let currentSchoolId = urlParams.get('school_id') || 'THCS_VT';
+    const alarmSound = document.getElementById('alarmSound');
+
+    // 1. Tải danh sách các trường học vào Dropdown
+    async function loadSchools() {
+      try {
+        const res = await fetch('/api/schools');
+        const schools = await res.json();
+        const select = document.getElementById('schoolSelect');
+        select.innerHTML = '';
+
+        for (const [id, name] of Object.entries(schools)) {
+          const option = document.createElement('option');
+          option.value = id;
+          option.textContent = name;
+          if (id === currentSchoolId) option.selected = true;
+          select.appendChild(option);
+        }
+
+        connectSocket();
+      } catch (err) {
+        console.error("Lỗi kết nối danh sách trường:", err);
+      }
+    }
+
+    // 2. Kết nối Socket Realtime riêng cho trường đã chọn
+    function connectSocket() {
+      if (socket) socket.disconnect();
+
+      socket = io({ query: { school_id: currentSchoolId } });
+
+      document.getElementById('status').innerText = "Đã kết nối";
+      document.getElementById('tableTitle').innerText = `📋 Nhật ký tín hiệu SOS - ${document.getElementById('schoolSelect').selectedOptions[0].text}`;
+
+      socket.on('sos_alert', (data) => {
+        alarmSound.play();
+
+        let mapUrl = "#";
+        let locationHTML = "Đang ở trong phòng học / Trong nhà (Chưa bắt được GPS)";
+        
+        if (data.latitude !== 0 && data.longitude !== 0) {
+          mapUrl = `https://www.google.com/maps?q=${data.latitude},${data.longitude}`;
+          locationHTML = `<a href="${mapUrl}" target="_blank" class="map-btn">📍 Bấm để mở vị trí thực tế trên Google Maps (${data.latitude}, ${data.longitude})</a>`;
+        }
+
+        const banner = document.getElementById('sosBanner');
+        const details = document.getElementById('sosDetails');
+        banner.style.display = 'block';
+        details.innerHTML = `
+          <strong>Trường:</strong> ${data.schoolName}<br>
+          <strong>Học sinh:</strong> ${data.studentName} | <strong>Lớp:</strong> ${data.studentClass}<br>
+          <strong>Mã Thẻ:</strong> ${data.macAddress}<br>
+          <strong>Thời gian:</strong> ${data.timestamp}<br>
+          ${locationHTML}
+        `;
+
+        // Thêm thông tin vào bảng lịch sử
+        const tbody = document.getElementById('sosLog');
+        if (tbody.children[0].children[0].colSpan === 6) {
+          tbody.innerHTML = '';
+        }
+        
+        const mapLinkBtn = (data.latitude !== 0) 
+          ? `<a href="${mapUrl}" target="_blank" style="color: #dc2626; font-weight: bold;">Mở bản đồ</a>`
+          : `Trong nhà (BSSID: ${data.bssid})`;
+
+        const newRow = `
+          <tr style="background: #fef2f2; color: #991b1b; font-weight: bold;">
+            <td>${data.timestamp}</td>
+            <td>${data.studentName}</td>
+            <td>${data.studentClass}</td>
+            <td>${data.macAddress}</td>
+            <td>${data.latitude}, ${data.longitude}</td>
+            <td>${mapLinkBtn}</td>
+          </tr>
+        `;
+        tbody.innerHTML = newRow + tbody.innerHTML;
+      });
+    }
+
+    // 3. Đổi trường theo dõi khi người dùng chọn trong Dropdown
+    function changeSchool() {
+      const select = document.getElementById('schoolSelect');
+      currentSchoolId = select.value;
+      
+      // Cập nhật lại URL mà không cần load lại trang
+      window.history.pushState({}, '', `?school_id=${currentSchoolId}`);
+      
+      // Xóa bảng lịch sử cũ và kết nối lại
+      document.getElementById('sosLog').innerHTML = `<tr><td colspan="6" style="text-align: center; color: #94a3b8;">Chưa có tín hiệu SOS nào cho trường này.</td></tr>`;
+      dismissAlert();
+      connectSocket();
+    }
+
+    function dismissAlert() {
+      alarmSound.pause();
+      alarmSound.currentTime = 0;
+      document.getElementById('sosBanner').style.display = 'none';
+    }
+
+    // Khởi chạy khi mở trang
+    loadSchools();
+  </script>
+</body>
+</html>
